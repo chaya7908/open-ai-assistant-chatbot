@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <title>אליעזר - שירות לקוחות</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #f4f4f4;
+    }
+
+    #modal {
+      position: fixed;
+      top: 0; right: 0; bottom: 0; left: 0;
+      background: rgba(0, 0, 0, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+
+    #modal-content {
+      background: #fff;
+      padding: 24px;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      text-align: center;
+      width: 300px;
+    }
+
+    #modal-content input {
+      width: 100%;
+      margin: 10px 0;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+    }
+
+    #modal-content button {
+      background-color: #007bff;
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    #chat-container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    #messages {
+      background-color: #fff;
+      padding: 20px;
+      border-radius: 12px;
+      height: 400px;
+      overflow-y: auto;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+
+    .user, .assistant {
+      margin: 10px 0;
+      padding: 10px 14px;
+      border-radius: 10px;
+      max-width: 80%;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .user {
+      background-color: #d0e7ff;
+      align-self: flex-start;
+    }
+
+    .assistant {
+      background-color: #e6e6e6;
+      align-self: flex-end;
+    }
+
+    #input {
+      width: 100%;
+      padding: 12px;
+      margin-top: 12px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      box-sizing: border-box;
+    }
+  </style>
+</head>
+<body>
+
+<div id="modal">
+  <div id="modal-content">
+    <h3>הזיני פרטי התחברות</h3>
+    <input type="text" id="assistantIdInput" placeholder="Assistant ID" />
+    <input type="password" id="appKeyInput" placeholder="App Key" />
+    <button onclick="saveCredentials()">התחל</button>
+  </div>
+</div>
+
+<div id="chat-container" style="display:none;">
+  <div id="messages"></div>
+  <input id="input" placeholder="הקלד הודעה ולחץ Enter" />
+</div>
+
+<script>
+  const input = document.getElementById('input');
+  const messagesDiv = document.getElementById('messages');
+
+  function saveCredentials() {
+    const assistantId = document.getElementById('assistantIdInput').value;
+    const appKey = document.getElementById('appKeyInput').value;
+    if (assistantId && appKey) {
+      localStorage.setItem('ASS_ID', assistantId);
+      localStorage.setItem('APP_KEY', appKey);
+      document.getElementById('modal').style.display = 'none';
+      document.getElementById('chat-container').style.display = 'block';
+      initChat();
+    }
+  }
+
+  async function initChat() {
+    let threadId = localStorage.getItem('THREAD_ID');
+    const assistantId = localStorage.getItem('ASS_ID');
+    const apiKey = localStorage.getItem('APP_KEY');
+
+    if (!threadId) {
+      const threadRes = await fetch("https://api.openai.com/v1/threads", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "OpenAI-Beta": "assistants=v2",
+          "Content-Type": "application/json"
+        }
+      });
+      const threadData = await threadRes.json();
+      threadId = threadData.id;
+      localStorage.setItem('THREAD_ID', threadId);
+    }
+
+    input.addEventListener("keypress", async (e) => {
+      if (e.key === "Enter") {
+        const userInput = input.value.trim();
+        if (!userInput) return;
+        messagesDiv.innerHTML += `<div class="user">👤 ${userInput}</div>`;
+        input.value = "";
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+        await fetch(`https://api.openai.com/v1/threads/${threadId}/messages`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "OpenAI-Beta": "assistants=v2",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ role: "user", content: userInput })
+        });
+
+        const runRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "OpenAI-Beta": "assistants=v2",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ assistant_id: assistantId })
+        });
+
+        const runData = await runRes.json();
+        const runId = runData.id;
+
+        let status = "in_progress";
+        while (status === "in_progress" || status === "queued") {
+          await new Promise(res => setTimeout(res, 1500));
+          const checkRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs/${runId}`, {
+            headers: {
+              "Authorization": `Bearer ${apiKey}`,
+              "OpenAI-Beta": "assistants=v2"
+            }
+          });
+          const checkData = await checkRes.json();
+          status = checkData.status;
+        }
+
+        const msgRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/messages`, {
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "OpenAI-Beta": "assistants=v2"
+          }
+        });
+        const msgData = await msgRes.json();
+        const lastMsg = msgData.data.find(m => m.role === "assistant");
+        messagesDiv.innerHTML += `<div class="assistant">🤖 ${lastMsg.content[0].text.value}</div>`;
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      }
+    });
+  }
+
+  window.onload = () => {
+    const hasCreds = localStorage.getItem('ASS_ID') && localStorage.getItem('APP_KEY');
+    if (hasCreds) {
+      document.getElementById('modal').style.display = 'none';
+      document.getElementById('chat-container').style.display = 'block';
+      initChat();
+    }
+  };
+</script>
+
+</body>
+</html>
